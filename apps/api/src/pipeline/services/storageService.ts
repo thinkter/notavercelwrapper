@@ -1,5 +1,35 @@
 import { env } from "../../env";
 
+function requireR2Config(): {
+  accessKeyId: string;
+  secretAccessKey: string;
+  bucketName: string;
+  endpoint: string;
+} {
+  const required = {
+    accessKeyId: env.R2_ACCESS_KEY_ID,
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+    bucketName: env.R2_BUCKET_NAME,
+    endpoint: env.R2_ENDPOINT,
+  };
+
+  if (
+    !required.accessKeyId ||
+    !required.secretAccessKey ||
+    !required.bucketName ||
+    !required.endpoint
+  ) {
+    throw new Error("R2 configuration is incomplete");
+  }
+
+  return {
+    accessKeyId: required.accessKeyId,
+    secretAccessKey: required.secretAccessKey,
+    bucketName: required.bucketName,
+    endpoint: required.endpoint,
+  };
+}
+
 type S3PutObjectInput = {
   Bucket: string;
   Key: string;
@@ -11,11 +41,11 @@ type S3PutObjectLike = {
 };
 
 const s3 = new Bun.S3Client({
-  accessKeyId: env.R2_ACCESS_KEY_ID,
-  secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+  accessKeyId: env.R2_ACCESS_KEY_ID ?? "",
+  secretAccessKey: env.R2_SECRET_ACCESS_KEY ?? "",
   endpoint: env.R2_ENDPOINT,
   region: "auto",
-  bucket: env.R2_BUCKET_NAME,
+  bucket: env.R2_BUCKET_NAME ?? "",
 });
 
 function encodeObjectKey(key: string): string {
@@ -27,11 +57,13 @@ function encodeObjectKey(key: string): string {
 }
 
 function buildObjectUrl(key: string): string {
-  const normalizedEndpoint = env.R2_ENDPOINT.replace(/\/+$/, "");
-  return `${normalizedEndpoint}/${env.R2_BUCKET_NAME}/${encodeObjectKey(key)}`;
+  const config = requireR2Config();
+  const normalizedEndpoint = config.endpoint.replace(/\/+$/, "");
+  return `${normalizedEndpoint}/${config.bucketName}/${encodeObjectKey(key)}`;
 }
 
 export async function uploadToR2(filePath: string, key: string): Promise<string> {
+  const config = requireR2Config();
   const file = Bun.file(filePath);
 
   if (!(await file.exists())) {
@@ -43,13 +75,13 @@ export async function uploadToR2(filePath: string, key: string): Promise<string>
 
   if (dynamicClient.putObject) {
     await dynamicClient.putObject({
-      Bucket: env.R2_BUCKET_NAME,
+      Bucket: config.bucketName,
       Key: key,
       Body: fileStream,
     });
   } else {
     await s3.write(key, file, {
-      bucket: env.R2_BUCKET_NAME,
+      bucket: config.bucketName,
       type: "application/x-tar",
     });
   }

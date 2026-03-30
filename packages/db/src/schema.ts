@@ -96,6 +96,7 @@ export const workers = pgTable("workers", {
   region: varchar("region", { length: 64 }).notNull(),
   state: varchar("state", { length: 32 }).notNull().default("idle"),
   instanceId: varchar("instance_id", { length: 128 }),
+  currentJobId: uuid("current_job_id"),
   lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
@@ -111,9 +112,46 @@ export const jobs = pgTable("jobs", {
   runtime: varchar("runtime", { length: 32 }).notNull(),
   sourceUrl: text("source_url").notNull(),
   entryCommand: text("entry_command").notNull(),
+  timeoutSeconds: integer("timeout_seconds").notNull().default(600),
   assignedWorkerId: uuid("assigned_worker_id").references(() => workers.id),
   exposedPort: integer("exposed_port"),
   metadata: jsonb("metadata").$type<Record<string, string | number | boolean>>(),
+  assignedAt: timestamp("assigned_at", { withTimezone: true }),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  logOutput: text("log_output"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+export const deployments = pgTable("deployments", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  status: varchar("status", { length: 32 }).notNull().default("queued"),
+  repoUrl: text("repo_url").notNull(),
+  runtime: varchar("runtime", { length: 32 }).notNull(),
+  branch: varchar("branch", { length: 128 }),
+  installCommand: text("install_command").notNull(),
+  buildCommand: text("build_command"),
+  startCommand: text("start_command").notNull(),
+  appPort: integer("app_port").notNull(),
+  envVars: jsonb("env_vars").$type<Record<string, string>>(),
+  assignedWorkerId: uuid("assigned_worker_id").references(() => workers.id),
+  hostPort: integer("host_port"),
+  publicUrl: text("public_url"),
+  imageTag: text("image_tag"),
+  containerId: text("container_id"),
+  commitSha: varchar("commit_sha", { length: 64 }),
+  buildLogs: text("build_logs"),
+  runtimeLogs: text("runtime_logs"),
+  errorMessage: text("error_message"),
+  assignedAt: timestamp("assigned_at", { withTimezone: true }),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),

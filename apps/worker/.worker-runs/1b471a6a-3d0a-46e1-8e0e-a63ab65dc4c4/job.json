@@ -1,0 +1,6 @@
+{
+  "id": "1b471a6a-3d0a-46e1-8e0e-a63ab65dc4c4",
+  "runtime": "node",
+  "source_url": "https://github.com/thinkter/serverless-demo-repo-nodejs.git",
+  "entry_command": "npm install && npm start"
+}

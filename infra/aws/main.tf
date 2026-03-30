@@ -72,6 +72,18 @@ resource "aws_security_group" "workers" {
     }
   }
 
+  dynamic "ingress" {
+    for_each = length(var.worker_public_http_cidr_blocks) == 0 ? [] : [80]
+
+    content {
+      description = "Public HTTP ingress for deployment proxy"
+      from_port   = ingress.value
+      to_port     = ingress.value
+      protocol    = "tcp"
+      cidr_blocks = var.worker_public_http_cidr_blocks
+    }
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -124,8 +136,11 @@ resource "aws_instance" "workers" {
   associate_public_ip_address = true
   user_data_replace_on_change = true
   user_data = templatefile("${path.module}/user_data.sh.tftpl", {
-    project_name = var.project_name
-    environment  = var.environment
+    project_name    = var.project_name
+    environment     = var.environment
+    worker_api_url  = var.worker_api_url
+    worker_repo_url = var.worker_repo_url
+    worker_repo_ref = var.worker_repo_ref
   })
 
   root_block_device {
@@ -138,4 +153,19 @@ resource "aws_instance" "workers" {
     Name = "${local.name_prefix}-worker-${count.index + 1}"
     Role = "warm-worker"
   })
+}
+
+resource "aws_eip" "workers" {
+  count  = var.worker_count
+  domain = "vpc"
+
+  tags = merge(local.common_tags, {
+    Name = "${local.name_prefix}-worker-eip-${count.index + 1}"
+  })
+}
+
+resource "aws_eip_association" "workers" {
+  count         = var.worker_count
+  instance_id   = aws_instance.workers[count.index].id
+  allocation_id = aws_eip.workers[count.index].id
 }

@@ -5,7 +5,7 @@ output "worker_instance_ids" {
 
 output "worker_public_ips" {
   description = "Public IP addresses of the warm workers."
-  value       = aws_instance.workers[*].public_ip
+  value       = aws_eip.workers[*].public_ip
 }
 
 output "worker_private_ips" {

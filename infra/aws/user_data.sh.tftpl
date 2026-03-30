@@ -20,18 +20,105 @@ retry() {
 }
 
 retry 5 dnf makecache --refresh
-retry 5 dnf install -y docker git unzip tar
+retry 5 dnf install -y docker git unzip tar python3 nginx
+
+mkdir -p /etc/nginx/conf.d/clircel
+
+cat >/etc/nginx/conf.d/${project_name}.conf <<EOF
+server {
+  listen 80 default_server;
+  listen [::]:80 default_server;
+  server_name _;
+
+  client_max_body_size 64m;
+
+  location = /healthz {
+    add_header Content-Type text/plain;
+    return 200 'ok';
+  }
+
+  include /etc/nginx/conf.d/clircel/*.conf;
+
+  location / {
+    default_type text/plain;
+    return 404 'deployment route not found';
+  }
+}
+EOF
 
 systemctl enable docker
 systemctl restart docker
+systemctl enable nginx
+systemctl restart nginx
 
-for user in ec2-user ssm-user; do
+for user in ec2-user ssm-user root; do
   if id "$user" >/dev/null 2>&1; then
     usermod -aG docker "$user"
   fi
 done
 
 mkdir -p /opt/${project_name}
+
+if [ -n "${worker_repo_url}" ] && [ -n "${worker_api_url}" ]; then
+  curl -fsSL https://bun.sh/install | bash
+  ln -sf /root/.bun/bin/bun /usr/local/bin/bun
+
+  mkdir -p /opt/${project_name}/app
+
+  if [ ! -d /opt/${project_name}/app/.git ]; then
+    git clone "${worker_repo_url}" /opt/${project_name}/app
+  fi
+
+  cd /opt/${project_name}/app
+  git fetch --all --tags
+  git checkout "${worker_repo_ref}"
+  git pull --ff-only origin "${worker_repo_ref}" || true
+
+  BUN_INSTALL=/root/.bun /usr/local/bin/bun install
+
+  INSTANCE_ID="$(curl -fsSL http://169.254.169.254/latest/meta-data/instance-id)"
+  REGION="$(curl -fsSL http://169.254.169.254/latest/dynamic/instance-identity/document | python3 -c 'import json,sys; print(json.load(sys.stdin)["region"])')"
+  HOSTNAME_VALUE="$(hostname)"
+  PUBLIC_IPV4="$(curl -fsSL http://169.254.169.254/latest/meta-data/public-ipv4 || true)"
+
+  cat >/etc/${project_name}-worker.env <<EOF
+WORKER_API_URL=${worker_api_url}
+WORKER_NAME=${project_name}-${environment}-${HOSTNAME_VALUE}
+WORKER_CLOUD=aws
+WORKER_REGION=${REGION}
+WORKER_INSTANCE_ID=${INSTANCE_ID}
+WORKER_POLL_INTERVAL_MS=5000
+WORKER_ROOT_DIR=/opt/${project_name}/runs
+WORKER_PUBLIC_HOST=${PUBLIC_IPV4}
+WORKER_PUBLIC_SCHEME=http
+WORKER_PUBLIC_BASE_PATH=/deployments
+WORKER_PROXY_PROVIDER=nginx
+WORKER_NGINX_CONFIG_DIR=/etc/nginx/conf.d/clircel
+EOF
+
+  cat >/etc/systemd/system/${project_name}-worker.service <<EOF
+[Unit]
+Description=${project_name} worker service
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/${project_name}/app
+EnvironmentFile=/etc/${project_name}-worker.env
+ExecStart=/usr/local/bin/bun run --cwd /opt/${project_name}/app/apps/worker start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable ${project_name}-worker.service
+  systemctl restart ${project_name}-worker.service
+fi
+
 cat >/etc/motd <<EOF
 ${project_name} ${environment} warm worker
 Docker is installed and ready.

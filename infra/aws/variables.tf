@@ -46,6 +46,24 @@ variable "worker_volume_size_gb" {
   default     = 20
 }
 
+variable "worker_api_url" {
+  description = "Public base URL for the API that workers should connect to. Leave empty to skip worker service bootstrap."
+  type        = string
+  default     = ""
+}
+
+variable "worker_repo_url" {
+  description = "Git repository URL the EC2 worker should clone to run apps/worker. Leave empty to skip worker service bootstrap."
+  type        = string
+  default     = ""
+}
+
+variable "worker_repo_ref" {
+  description = "Git branch, tag, or commit to checkout for the worker code."
+  type        = string
+  default     = "main"
+}
+
 variable "worker_allowed_cidr_blocks" {
   description = "Optional inbound CIDR blocks. Leave empty to avoid opening ports."
   type        = list(string)
@@ -55,5 +73,11 @@ variable "worker_allowed_cidr_blocks" {
 variable "worker_ingress_ports" {
   description = "Optional inbound ports to open for the workers."
   type        = list(number)
+  default     = []
+}
+
+variable "worker_public_http_cidr_blocks" {
+  description = "CIDR blocks allowed to access the worker reverse proxy on port 80."
+  type        = list(string)
   default     = []
 }

@@ -9,6 +9,13 @@ This Terraform stack creates:
 - 1 IAM role + instance profile for SSM access
 - 2 always-on EC2 workers by default
 
+If you set `worker_api_url` and `worker_repo_url`, the EC2 instances will also:
+
+- install Bun
+- clone your repo
+- install workspace dependencies
+- start `apps/worker` as a `systemd` service
+
 ## Auth
 
 Terraform uses normal AWS credentials. The fastest path is to export them in your shell:
@@ -42,3 +49,4 @@ If your IAM user is restricted, keep `worker_ami_id` set explicitly in `terrafor
 - No inbound ports are opened by default.
 - Use AWS Systems Manager Session Manager to access the workers instead of SSH.
 - If you want to expose your app on a worker later, add CIDRs and ports in `terraform.tfvars`.
+- The worker auto-bootstrap expects the repo URL to be reachable from EC2. Public Git repositories are the easiest path for the hackathon.

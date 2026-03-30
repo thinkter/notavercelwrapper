@@ -15,6 +15,27 @@
       "when": 1774872777371,
       "tag": "0001_adorable_rogue",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1774878344384,
+      "tag": "0002_cute_solo",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1774887676625,
+      "tag": "0003_old_lady_mastermind",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1774888932200,
+      "tag": "0004_calm_bloodstorm",
+      "breakpoints": true
     }
   ]
 }

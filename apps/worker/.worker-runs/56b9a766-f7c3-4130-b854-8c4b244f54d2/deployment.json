@@ -1,0 +1,11 @@
+{
+  "id": "56b9a766-f7c3-4130-b854-8c4b244f54d2",
+  "repo_url": "https://github.com/thinkter/serverless-demo-repo-nodejs.git",
+  "runtime": "typescript",
+  "branch": null,
+  "install_command": "npm install",
+  "build_command": "--start-command",
+  "start_command": "npm start",
+  "app_port": 3000,
+  "env_vars": null
+}
