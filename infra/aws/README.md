@@ -11,10 +11,20 @@ This Terraform stack creates:
 
 If you set `worker_api_url` and `worker_repo_url`, the EC2 instances will also:
 
-- install Bun
 - clone your repo
-- install workspace dependencies
-- start `apps/worker` as a `systemd` service
+- build the `apps/worker` Docker image
+- start the worker container as a `systemd` service
+
+For this monorepo, use the public HTTPS GitHub URL instead of the SSH remote unless you are also setting up deploy keys:
+
+```hcl
+worker_api_url               = "http://YOUR_API_PUBLIC_HOST:3001"
+worker_repo_url              = "https://github.com/thinkter/notavercelwrapper.git"
+worker_repo_ref              = "test"
+worker_public_http_cidr_blocks = ["0.0.0.0/0"]
+```
+
+`worker_api_url` must point to wherever your Bun API is actually reachable from the EC2 workers. Terraform cannot discover this automatically right now because this stack does not provision the API service itself, only the worker hosts.
 
 ## Auth
 
@@ -50,3 +60,4 @@ If your IAM user is restricted, keep `worker_ami_id` set explicitly in `terrafor
 - Use AWS Systems Manager Session Manager to access the workers instead of SSH.
 - If you want to expose your app on a worker later, add CIDRs and ports in `terraform.tfvars`.
 - The worker auto-bootstrap expects the repo URL to be reachable from EC2. Public Git repositories are the easiest path for the hackathon.
+- If your API is only running on your laptop, the EC2 workers cannot reach `localhost`. Put the API on a public host or a reachable VM first, then use that host in `worker_api_url`.

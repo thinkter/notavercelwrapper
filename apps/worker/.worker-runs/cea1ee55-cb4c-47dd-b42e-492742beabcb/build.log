@@ -1,0 +1,42 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from .clircel.Dockerfile
+#1 transferring dockerfile: 157B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/node:20-bookworm
+#2 DONE 1.6s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/4] FROM docker.io/library/node:20-bookworm@sha256:a4545fc6f4f1483384ad5f4c71d34d71781c3779da407173ec6058079a718520
+#4 DONE 0.0s
+
+#5 [internal] load build context
+#5 transferring context: 33.79kB done
+#5 DONE 0.0s
+
+#6 [2/4] WORKDIR /workspace
+#6 CACHED
+
+#7 [3/4] COPY . .
+#7 DONE 0.0s
+
+#8 [4/4] RUN npm install
+#8 3.405 
+#8 3.405 added 68 packages, and audited 69 packages in 3s
+#8 3.405 
+#8 3.405 15 packages are looking for funding
+#8 3.405   run `npm fund` for details
+#8 3.407 
+#8 3.407 found 0 vulnerabilities
+#8 DONE 6.0s
+
+#9 exporting to image
+#9 exporting layers
+#9 exporting layers 2.3s done
+#9 writing image sha256:24ce461185d0563315034b4e0942bde6d4c834de33139a17f7641dc727e2f9c0 done
+#9 naming to docker.io/library/clircel-deployment-cea1ee55-cb4c-47dd-b42e-492742beabcb done
+#9 DONE 2.3s

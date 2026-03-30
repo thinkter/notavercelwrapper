@@ -1,9 +1,11 @@
 export {};
 
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { z } from "zod";
 
@@ -20,6 +22,8 @@ const envSchema = z.object({
   WORKER_PUBLIC_BASE_PATH: z.string().default("/deployments"),
   WORKER_PROXY_PROVIDER: z.enum(["none", "nginx"]).default("none"),
   WORKER_NGINX_CONFIG_DIR: z.string().default("/etc/nginx/conf.d/clircel"),
+  WORKER_NGINX_VALIDATE_COMMAND: z.string().default("nginx -t"),
+  WORKER_NGINX_RELOAD_COMMAND: z.string().default("systemctl reload nginx"),
 });
 
 const env = envSchema.parse(process.env);
@@ -45,6 +49,7 @@ type ClaimedDeployment = z.infer<typeof claimDeploymentResponseSchema>["deployme
 
 let workerId: string | null = null;
 let currentDeploymentId: string | null = null;
+let cachedResolvedPublicHost: string | null = null;
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(new URL(path, env.WORKER_API_URL), {
@@ -81,6 +86,21 @@ async function registerWorker() {
 
   workerId = response.worker.id;
   console.log(`Registered worker ${env.WORKER_NAME} as ${workerId}`);
+}
+
+async function resolveAwsPublicHost() {
+  if (cachedResolvedPublicHost) {
+    return cachedResolvedPublicHost;
+  }
+
+  const response = await fetch("http://169.254.169.254/latest/meta-data/public-ipv4");
+  if (!response.ok) {
+    throw new Error(`Failed to resolve AWS public IP: ${response.status}`);
+  }
+
+  const value = (await response.text()).trim();
+  cachedResolvedPublicHost = value;
+  return value;
 }
 
 async function heartbeat(state: "idle" | "busy" | "offline") {
@@ -140,23 +160,31 @@ async function updateDeploymentStatus(
 }
 
 async function runCommand(command: string, cwd: string) {
-  const proc = Bun.spawn({
-    cmd: ["bash", "-lc", command],
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
+  return await new Promise<{ exitCode: number; output: string }>((resolve, reject) => {
+    const proc = spawn("bash", ["-lc", command], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    proc.stdout.setEncoding("utf8");
+    proc.stderr.setEncoding("utf8");
+    proc.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    proc.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    proc.on("error", reject);
+    proc.on("close", (code) => {
+      resolve({
+        exitCode: code ?? 1,
+        output: `${stdout}${stderr ? `\n${stderr}` : ""}`.trim(),
+      });
+    });
   });
-
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-
-  return {
-    exitCode,
-    output: `${stdout}${stderr ? `\n${stderr}` : ""}`.trim(),
-  };
 }
 
 async function runCommandStreaming(
@@ -164,11 +192,9 @@ async function runCommandStreaming(
   cwd: string,
   onUpdate?: (output: string) => Promise<void>,
 ) {
-  const proc = Bun.spawn({
-    cmd: ["bash", "-lc", command],
+  const proc = spawn("bash", ["-lc", command], {
     cwd,
-    stdout: "pipe",
-    stderr: "pipe",
+    stdio: ["ignore", "pipe", "pipe"],
   });
 
   let output = "";
@@ -194,37 +220,38 @@ async function runCommandStreaming(
     await onUpdate(output.trim());
   };
 
-  const collectStream = async (stream: ReadableStream<Uint8Array> | null) => {
+  const collectStream = async (stream: NodeJS.ReadableStream | null) => {
     if (!stream) {
       return;
     }
 
-    const reader = stream.getReader();
-    const decoder = new TextDecoder();
+    stream.setEncoding("utf8");
 
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
+    await new Promise<void>((resolve, reject) => {
+      stream.on("data", (chunk: string) => {
+        output += chunk;
 
-        if (done) {
-          break;
-        }
-
-        output += decoder.decode(value, { stream: true });
-        await maybeUpdate();
-      }
-
-      output += decoder.decode();
-    } finally {
-      reader.releaseLock();
-    }
+        void maybeUpdate().catch(reject);
+      });
+      stream.on("end", resolve);
+      stream.on("error", reject);
+    });
   };
 
-  await Promise.all([collectStream(proc.stdout), collectStream(proc.stderr), proc.exited]);
+  const exitCodePromise = new Promise<number>((resolve, reject) => {
+    proc.on("error", reject);
+    proc.on("close", (code) => resolve(code ?? 1));
+  });
+
+  const [exitCode] = await Promise.all([
+    exitCodePromise,
+    collectStream(proc.stdout),
+    collectStream(proc.stderr),
+  ]);
   await maybeUpdate(true);
 
   return {
-    exitCode: await proc.exited,
+    exitCode,
     output: output.trim(),
   };
 }
@@ -279,7 +306,7 @@ async function stageSource(sourceUrl: string, workdir: string, branch?: string |
     );
   }
 
-  await Bun.write(archivePath, await download.arrayBuffer());
+  await writeFile(archivePath, Buffer.from(await download.arrayBuffer()));
 
   if (archivePath.endsWith(".zip")) {
     const unzipResult = await runCommand(
@@ -309,7 +336,7 @@ async function stageSource(sourceUrl: string, workdir: string, branch?: string |
     );
   }
 
-  const entries = Array.from(new Bun.Glob("*").scanSync({ cwd: sourceDir }));
+  const entries = await readdir(sourceDir);
   if (entries.length === 1) {
     return join(sourceDir, entries[0]!);
   }
@@ -398,19 +425,33 @@ async function waitForPort(port: number, timeoutMs: number) {
       return;
     }
 
-    await Bun.sleep(1000);
+    await sleep(1000);
   }
 
   throw new Error(`Timed out waiting for deployment port ${port} to become reachable`);
 }
 
-function deploymentPublicUrl(deploymentId: string) {
-  if (!env.WORKER_PUBLIC_HOST) {
+async function resolvedPublicHost() {
+  if (env.WORKER_PUBLIC_HOST) {
+    return env.WORKER_PUBLIC_HOST;
+  }
+
+  if (env.WORKER_CLOUD === "aws") {
+    return await resolveAwsPublicHost().catch(() => undefined);
+  }
+
+  return undefined;
+}
+
+async function deploymentPublicUrl(deploymentId: string) {
+  const publicHost = await resolvedPublicHost();
+
+  if (!publicHost) {
     return undefined;
   }
 
   const basePath = env.WORKER_PUBLIC_BASE_PATH.replace(/\/+$/, "");
-  return `${env.WORKER_PUBLIC_SCHEME}://${env.WORKER_PUBLIC_HOST}${basePath}/${deploymentId}/`;
+  return `${env.WORKER_PUBLIC_SCHEME}://${publicHost}${basePath}/${deploymentId}/`;
 }
 
 function nginxConfigForDeployment(deploymentId: string, hostPort: number) {
@@ -436,24 +477,24 @@ function nginxConfigForDeployment(deploymentId: string, hostPort: number) {
 
 async function publishDeploymentRoute(deploymentId: string, hostPort: number, cwd: string) {
   if (env.WORKER_PROXY_PROVIDER !== "nginx") {
-    return deploymentPublicUrl(deploymentId);
+    return await deploymentPublicUrl(deploymentId);
   }
 
   await mkdir(env.WORKER_NGINX_CONFIG_DIR, { recursive: true });
   const configPath = join(env.WORKER_NGINX_CONFIG_DIR, `${deploymentId}.conf`);
-  await Bun.write(configPath, nginxConfigForDeployment(deploymentId, hostPort));
+  await writeFile(configPath, nginxConfigForDeployment(deploymentId, hostPort));
 
-  const validateResult = await runCommand("nginx -t", cwd);
+  const validateResult = await runCommand(env.WORKER_NGINX_VALIDATE_COMMAND, cwd);
   if (validateResult.exitCode !== 0) {
     throw new Error(`nginx config validation failed: ${validateResult.output}`);
   }
 
-  const reloadResult = await runCommand("systemctl reload nginx", cwd);
+  const reloadResult = await runCommand(env.WORKER_NGINX_RELOAD_COMMAND, cwd);
   if (reloadResult.exitCode !== 0) {
     throw new Error(`nginx reload failed: ${reloadResult.output}`);
   }
 
-  return deploymentPublicUrl(deploymentId);
+  return await deploymentPublicUrl(deploymentId);
 }
 
 function envArgs(envVars: Record<string, string> | null | undefined) {
@@ -490,10 +531,10 @@ async function executeDeployment(deployment: NonNullable<ClaimedDeployment>) {
     const commitSha = await getCommitSha(sourceDir);
 
     await mkdir(artifactDir, { recursive: true });
-    await Bun.write(join(artifactDir, "deployment.json"), JSON.stringify(deployment, null, 2));
+    await writeFile(join(artifactDir, "deployment.json"), JSON.stringify(deployment, null, 2));
 
     const dockerfilePath = join(sourceDir, ".clircel.Dockerfile");
-    await Bun.write(dockerfilePath, dockerfileForDeployment(deployment));
+    await writeFile(dockerfilePath, dockerfileForDeployment(deployment));
 
     await updateDeploymentStatus(deployment.id, "building", {
       imageTag,
@@ -513,7 +554,7 @@ async function executeDeployment(deployment: NonNullable<ClaimedDeployment>) {
       },
     );
 
-    await Bun.write(join(artifactDir, "build.log"), buildResult.output);
+    await writeFile(join(artifactDir, "build.log"), buildResult.output);
 
     if (buildResult.exitCode !== 0) {
       await updateDeploymentStatus(deployment.id, "failed", {
@@ -562,7 +603,7 @@ async function executeDeployment(deployment: NonNullable<ClaimedDeployment>) {
     const runtimeLogs = await dockerLogs(containerName, sourceDir);
     const publicUrl = await publishDeploymentRoute(deployment.id, hostPort, sourceDir);
 
-    await Bun.write(join(artifactDir, "runtime.log"), runtimeLogs);
+    await writeFile(join(artifactDir, "runtime.log"), runtimeLogs);
     await updateDeploymentStatus(deployment.id, "running", {
       hostPort,
       publicUrl,
@@ -579,7 +620,7 @@ async function executeDeployment(deployment: NonNullable<ClaimedDeployment>) {
 
     await updateDeploymentStatus(deployment.id, "failed", {
       hostPort,
-      publicUrl: hostPort ? deploymentPublicUrl(deployment.id) : undefined,
+      publicUrl: hostPort ? await deploymentPublicUrl(deployment.id) : undefined,
       imageTag,
       containerId,
       runtimeLogs,
@@ -619,7 +660,7 @@ async function loop() {
       console.error("Worker loop error", error);
     }
 
-    await Bun.sleep(env.WORKER_POLL_INTERVAL_MS);
+    await sleep(env.WORKER_POLL_INTERVAL_MS);
   }
 }
 
@@ -634,6 +675,18 @@ async function shutdown() {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-await registerWorker();
-await heartbeat("idle");
+async function waitForRegistration() {
+  while (!workerId) {
+    try {
+      await registerWorker();
+      await heartbeat("idle");
+      return;
+    } catch (error) {
+      console.error("Worker registration failed", error);
+      await sleep(env.WORKER_POLL_INTERVAL_MS);
+    }
+  }
+}
+
+await waitForRegistration();
 await loop();

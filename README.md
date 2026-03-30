@@ -1,13 +1,13 @@
 # Clircel Monorepo
 
-This repo is now split into a small Bun workspace monorepo so you can build the hackathon control plane without mixing the frontend, API, and database code together.
+This repo is now split into a small monorepo so you can build the hackathon control plane without mixing the frontend, API, and database code together.
 
 ## Apps
 
 - `apps/web`: Next.js 16 frontend
 - `apps/api`: Elysia API running on Bun
 - `apps/cli`: Bun CLI for local automation and GitHub Actions
-- `apps/worker`: Bun worker agent that polls the API and executes jobs
+- `apps/worker`: Node.js worker agent that polls the API and executes jobs
 - `packages/db`: Drizzle schema and CockroachDB client
 
 ## Run It
@@ -108,7 +108,7 @@ The current worker supports:
 The Terraform in `infra/aws` can now do two levels of setup:
 
 - base mode: create EC2 workers with Docker and supporting tools
-- full mode: also install Bun, clone your repo, and run `apps/worker` as a `systemd` service
+- full mode: clone your repo, build the worker Docker image, and run `apps/worker` in Docker under `systemd`
 
 To enable full mode, set these in `infra/aws/terraform.tfvars` before applying:
 

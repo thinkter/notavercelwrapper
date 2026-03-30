@@ -60,9 +60,6 @@ done
 mkdir -p /opt/${project_name}
 
 if [ -n "${worker_repo_url}" ] && [ -n "${worker_api_url}" ]; then
-  curl -fsSL https://bun.sh/install | bash
-  ln -sf /root/.bun/bin/bun /usr/local/bin/bun
-
   mkdir -p /opt/${project_name}/app
 
   if [ ! -d /opt/${project_name}/app/.git ]; then
@@ -74,26 +71,29 @@ if [ -n "${worker_repo_url}" ] && [ -n "${worker_api_url}" ]; then
   git checkout "${worker_repo_ref}"
   git pull --ff-only origin "${worker_repo_ref}" || true
 
-  BUN_INSTALL=/root/.bun /usr/local/bin/bun install
+  docker build -f apps/worker/Dockerfile -t ${project_name}-worker:latest .
 
-  INSTANCE_ID="$(curl -fsSL http://169.254.169.254/latest/meta-data/instance-id)"
-  REGION="$(curl -fsSL http://169.254.169.254/latest/dynamic/instance-identity/document | python3 -c 'import json,sys; print(json.load(sys.stdin)["region"])')"
+  IMDS_TOKEN="$(curl -fsSL -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600')"
+  INSTANCE_ID="$(curl -fsSL -H "X-aws-ec2-metadata-token: $${IMDS_TOKEN}" http://169.254.169.254/latest/meta-data/instance-id)"
+  REGION="$(curl -fsSL -H "X-aws-ec2-metadata-token: $${IMDS_TOKEN}" http://169.254.169.254/latest/dynamic/instance-identity/document | python3 -c 'import json,sys; print(json.load(sys.stdin)["region"])')"
   HOSTNAME_VALUE="$(hostname)"
-  PUBLIC_IPV4="$(curl -fsSL http://169.254.169.254/latest/meta-data/public-ipv4 || true)"
+  PUBLIC_IPV4="$(curl -fsSL -H "X-aws-ec2-metadata-token: $${IMDS_TOKEN}" http://169.254.169.254/latest/meta-data/public-ipv4 || true)"
 
   cat >/etc/${project_name}-worker.env <<EOF
 WORKER_API_URL=${worker_api_url}
-WORKER_NAME=${project_name}-${environment}-${HOSTNAME_VALUE}
+WORKER_NAME=${project_name}-${environment}-$${HOSTNAME_VALUE}
 WORKER_CLOUD=aws
-WORKER_REGION=${REGION}
-WORKER_INSTANCE_ID=${INSTANCE_ID}
+WORKER_REGION=$${REGION}
+WORKER_INSTANCE_ID=$${INSTANCE_ID}
 WORKER_POLL_INTERVAL_MS=5000
 WORKER_ROOT_DIR=/opt/${project_name}/runs
-WORKER_PUBLIC_HOST=${PUBLIC_IPV4}
+WORKER_PUBLIC_HOST=$${PUBLIC_IPV4}
 WORKER_PUBLIC_SCHEME=http
 WORKER_PUBLIC_BASE_PATH=/deployments
 WORKER_PROXY_PROVIDER=nginx
 WORKER_NGINX_CONFIG_DIR=/etc/nginx/conf.d/clircel
+WORKER_NGINX_VALIDATE_COMMAND=nsenter -t 1 -m -u -i -n -p nginx -t
+WORKER_NGINX_RELOAD_COMMAND=nsenter -t 1 -m -u -i -n -p systemctl reload nginx
 EOF
 
   cat >/etc/systemd/system/${project_name}-worker.service <<EOF
@@ -105,8 +105,9 @@ Wants=network-online.target docker.service
 [Service]
 Type=simple
 WorkingDirectory=/opt/${project_name}/app
-EnvironmentFile=/etc/${project_name}-worker.env
-ExecStart=/usr/local/bin/bun run --cwd /opt/${project_name}/app/apps/worker start
+ExecStartPre=-/usr/bin/docker rm -f ${project_name}-worker
+ExecStart=/usr/bin/docker run --rm --name ${project_name}-worker --network host --pid host --privileged --env-file /etc/${project_name}-worker.env -v /var/run/docker.sock:/var/run/docker.sock -v /etc/nginx/conf.d/clircel:/etc/nginx/conf.d/clircel -v /opt/${project_name}/runs:/opt/${project_name}/runs ${project_name}-worker:latest
+ExecStop=/usr/bin/docker stop ${project_name}-worker
 Restart=always
 RestartSec=5
 
